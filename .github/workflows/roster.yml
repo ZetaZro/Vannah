@@ -1,0 +1,26 @@
+name: Build roster
+on:
+  schedule: [{ cron: "*/10 * * * *" }]
+  workflow_dispatch: {}
+  push: { branches: [main], paths: ["bans.json", "build-roster.mjs"] }
+permissions: { contents: read, pages: write, id-token: write }
+concurrency: { group: roster, cancel-in-progress: true }
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: { name: github-pages, url: "${{ steps.deploy.outputs.page_url }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: node build-roster.mjs
+        env:
+          VRC_AUTH_COOKIE: ${{ secrets.VRC_AUTH_COOKIE }}
+          VRC_GROUP_ID: ${{ secrets.VRC_GROUP_ID }}
+          VRC_USER_AGENT: ${{ secrets.VRC_USER_AGENT }}
+          BANS_JSON: ${{ secrets.BANS_JSON }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: dist }
+      - id: deploy
+        uses: actions/deploy-pages@v4
