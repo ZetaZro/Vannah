@@ -21,22 +21,42 @@ const norm = (s) => (s || "").trim().toLowerCase();
 function hash1(s) { let h = 0x811c9dc5 | 0; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h | 0; }
 function hash2(s) { let h = 0x1b873593 | 0; for (let i = 0; i < s.length; i++) { h ^= (s.charCodeAt(i) + 31); h = Math.imul(h, 16777619); } return h | 0; }
 
+const BASES = ["https://api.vrchat.cloud/api/1", "https://vrchat.com/api/1"];
+let base = BASES[0];
+function cleanCookie() {
+  let c = (process.env.VRC_AUTH_COOKIE || "").replace(/[\r\n\s"']/g, "");
+  if (c.toLowerCase().startsWith("auth=")) c = c.slice(5);
+  return c;
+}
+
 async function api(path) {
-  const cookie = process.env.VRC_AUTH_COOKIE;
-  if (!cookie) throw new Error("Falta VRC_AUTH_COOKIE");
+  const c = cleanCookie();
+  if (!c) throw new Error("Falta VRC_AUTH_COOKIE");
   for (let attempt = 0; attempt < 4; attempt++) {
-    const res = await fetch(API + path, { headers: { "User-Agent": UA, Cookie: cookie.startsWith("auth=") ? cookie : "auth=" + cookie } });
+    const res = await fetch(base + path, { headers: { "User-Agent": UA, Cookie: "auth=" + c } });
     if (res.status === 429) { await sleep(15000 * (attempt + 1)); continue; }
-    if (res.status === 401) throw new Error("Cookie de VRChat vencida o inválida (401): renová VRC_AUTH_COOKIE");
-    if (!res.ok) throw new Error(`HTTP ${res.status} en ${path}`);
+    if (res.status === 401) throw new Error("401 en " + path + ": VRChat no acepta la cookie (largo " + c.length + ", empieza con '" + c.slice(0, 11) + "...'). Debe empezar con authcookie_ y ser de una sesión iniciada");
+    if (res.status === 403) throw new Error("403 en " + path + ": la cuenta no tiene permiso para ver los miembros del grupo (o no está en el grupo)");
+    if (!res.ok) throw new Error("HTTP " + res.status + " en " + path);
     return res.json();
   }
   throw new Error("Demasiados reintentos (429) en " + path);
 }
 
+async function checkLogin() {
+  let last;
+  for (const b of BASES) {
+    base = b;
+    try { const u = await api("/auth/user"); if (u.requiresTwoFactorAuth) throw new Error("La sesión pide 2FA: iniciá sesión completa (con el código) en vrchat.com y copiá la cookie de nuevo"); console.log("Sesión OK como " + u.displayName + " (" + b + ")"); return; }
+    catch (e) { last = e; console.warn("Fallo con " + b + ": " + e.message); }
+  }
+  throw last;
+}
+
 async function loadMembers() {
   if (process.env.MANUAL_MEMBERS) return JSON.parse(fs.readFileSync(process.env.MANUAL_MEMBERS, "utf8"));
-  const gid = process.env.VRC_GROUP_ID; if (!gid) throw new Error("Falta VRC_GROUP_ID");
+  const gid = (process.env.VRC_GROUP_ID || "").trim(); if (!gid) throw new Error("Falta VRC_GROUP_ID");
+  await checkLogin();
   const out = [];
   for (let off = 0; ; off += 100) {
     const page = await api(`/groups/${gid}/members?n=100&offset=${off}`);
